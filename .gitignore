@@ -30,3 +30,7 @@
 *.exe
 *.out
 *.app
+
+# Test I/O
+*/input.txt
+*/output.txt
