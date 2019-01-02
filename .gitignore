@@ -34,3 +34,6 @@
 # Test I/O
 */input.txt
 */output.txt
+
+# VS Code
+.vscode/*
