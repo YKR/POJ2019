@@ -17,6 +17,8 @@
 
 using namespace std;
 
+#define OUTPUT_DEBUG(TARGET) cerr << #TARGET << " == " << TARGET << endl;
+
 int main()
 {
     ios::sync_with_stdio(false);
