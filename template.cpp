@@ -17,7 +17,12 @@
 
 using namespace std;
 
-#define OUTPUT_DEBUG(TARGET) cerr << #TARGET << " == " << TARGET << endl;
+#define OUTPUT_DEBUG1(TARGET0) \
+cerr << #TARGET0 << " == " << TARGET0 << endl;
+#define OUTPUT_DEBUG2(TARGET0, TARGET1) \
+cerr << #TARGET0 << " == " << TARGET0 << "," << #TARGET1 << " == " << TARGET1 << endl;
+#define OUTPUT_DEBUG3(TARGET0, TARGET1, TARGET2) \
+cerr << #TARGET0 << " == " << TARGET0 << "," << #TARGET1 << " == " << TARGET1 << "," << #TARGET2 << " == " << TARGET2 << endl;
 
 int main()
 {
