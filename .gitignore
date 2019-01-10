@@ -34,6 +34,7 @@
 # Test I/O
 */input.txt
 */output.txt
+*/output1.txt
 
 # VS Code
 .vscode/*
