@@ -25,313 +25,305 @@ cerr << #TARGET0 << " == " << TARGET0 << "," << #TARGET1 << " == " << TARGET1 <<
 #define OUTPUT_DEBUG3(TARGET0, TARGET1, TARGET2) \
 cerr << #TARGET0 << " == " << TARGET0 << "," << #TARGET1 << " == " << TARGET1 << "," << #TARGET2 << " == " << TARGET2 << endl;
 
-enum AgentStatus
+string sec2str(int sec)
 {
-    AGENT_ENTRY = 0,
-    AGENT_IN_ROOM,
-    AGENT_IN_ELEVATOR,
-    AGENT_WAIT_ROOM,
-    AGENT_WAIT_ELEVATOR,
-    AGENT_EXIT,
+    if (sec < 0) return "[InvalidTime]";
+    int h = sec / 3600 % 24;
+    int m = sec / 60 % 60;
+    int s = sec % 60;
+    string ret = "00:00:00";
+    ret[0] = h / 10 + '0'; ret[1] = h % 10 + '0';
+    ret[3] = m / 10 + '0'; ret[4] = m % 10 + '0';
+    ret[6] = s / 10 + '0'; ret[7] = s % 10 + '0';
+    return ret;
+}
+int str2sec(const string & str)
+{
+    int h = (str[0] - '0') * 10 + (str[1] - '0');
+    int m = (str[3] - '0') * 10 + (str[4] - '0');
+    int s = (str[6] - '0') * 10 + (str[7] - '0');
+    return h * 3600 + m * 60 + s;
+}
+
+enum AgentStateType
+{
+    STATE_None,
+    STATE_EntryExit,
+    STATE_Stay,
+    STATE_Transfer,
+    STATE_Waiting
 };
 
-int str2sec(const string & s)
+inline int RoomGetFloor(int roomNumber)
 {
-    int hours = (s[0] - '0') * 10 + (s[1] - '0');
-    int minutes = (s[3] - '0') * 10 + (s[4] - '0');
-    int seconds = (s[6] - '0') * 10 + (s[7] - '0');
-    return hours * 3600 + minutes * 60 + seconds;
+    return roomNumber == -1 ? 1 : roomNumber / 100;
 }
-string sec2str(int secs)
+inline int RoomGetId(int roomNumber)
 {
-    int hours = secs / 3600;
-    int minutes = secs % 3600 / 60;
-    int seconds = secs % 60;
-    string ret; ret.resize(8);
-    ret[0] = hours / 10 + '0'; ret[1] = hours % 10 + '0'; ret[2] = ':';
-    ret[3] = minutes / 10 + '0'; ret[4] = minutes % 10 + '0'; ret[5] = ':';
-    ret[6] = seconds / 10 + '0'; ret[7] = seconds % 10 + '0';
-    return ret;
+    return roomNumber == -1 ? -1 : roomNumber % 100;
+}
+inline int MakeRoomNumber(int roomFloor, int roomId)
+{
+    if (roomFloor <= 0 || roomId < 0 || roomFloor > 10 || roomId > 10) return -1;
+    return roomFloor * 100 + roomId;
+}
+inline int MakeElevatorNumber(int roomFloor)
+{
+    return MakeRoomNumber(roomFloor, 0);
+}
+inline bool IsElevator(int roomNumber)
+{
+    return RoomGetId(roomNumber) == 0;
 }
 
 struct Agent
 {
-    char name;
-    vector<pair<int, int> > plan;
-    ostringstream schedule;
-    AgentStatus status;
-    int curPos;
-    int curPlan;
-    int lastSec;
-    Agent()
-        : name(0)
-        , plan()
-        , schedule("", ios_base::app)
-        , status(AGENT_EXIT)
-        , curPos(0)
-        , curPlan(0)
-        , lastSec(0)
-    {}
-    Agent(const Agent & other)
-        : name(other.name)
-        , plan(other.plan)
-        , schedule(other.schedule.str(), ios_base::app)
-        , status(other.status)
-        , curPos(other.curPos)
-        , curPlan(other.curPlan)
-        , lastSec(other.lastSec)
-    {}
-    Agent & operator= (const Agent & other)
+    char identity;
+    vector<pair<int, int> > plans;
+    int planPtr;
+    int state;
+    int roomNumber;
+    int enterSec;
+    Agent() : plans(), planPtr(0), state(STATE_None),
+        roomNumber(-1), enterSec(-1) {}
+    int GetPlanTarget()
     {
-        name = other.name;
-        plan = other.plan;
-        schedule.str(other.schedule.str());
-        status = other.status;
-        curPos = other.curPos;
-        curPlan = other.curPlan;
-        lastSec = other.lastSec;
-        return *this;
+        if (planPtr < 0) planPtr = 0;
+        if (planPtr >= plans.size()) return -1;
+        return plans[planPtr].first;
     }
-    int plotCourse()
+    int GetPlanDuration()
     {
-        if (curPlan == plan.size()) // go to exit
+        if (planPtr < 0) planPtr = 0;
+        if (planPtr >= plans.size()) return -1;
+        return plans[planPtr].second;
+    }
+    int PlotCourse(int targetRoom)
+    {
+        if (RoomGetFloor(roomNumber) != RoomGetFloor(targetRoom))
         {
-            if (curPos / 100 > 1)
-            {
-                if (curPos % 100 > 0) return curPos / 100 * 100;
-                else return 100;
-            }
-            return 111;
+            if (IsElevator(roomNumber))
+                return MakeElevatorNumber(RoomGetFloor(targetRoom));
+            else
+                return MakeElevatorNumber(RoomGetFloor(roomNumber));
         }
-        int nexRoom = plan[curPlan].first;
-        if (nexRoom / 100 != curPos / 100)
+        else
         {
-            if (curPos % 100 == 0)
-            {
-                return nexRoom / 100 * 100;
-            }
-            return curPos / 100 * 100;
+            return targetRoom;
         }
-        return nexRoom;
+    }
+    void ChangeState(ostringstream & o, int sec, int nextState, int nextRoom = -1)
+    {
+        if (!(sec == enterSec))
+        {
+            o << sec2str(enterSec) << ' ' << sec2str(sec) << ' ';
+            switch (state)
+            {
+                case STATE_EntryExit:
+                    if (nextState == STATE_None) o << "Exit";
+                    else o << "Entry";
+                    o << endl;
+                    break;
+                case STATE_Stay:
+                    o << "Stay in ";
+                    if (IsElevator(roomNumber)) o << "elevator";
+                    else o << "room " << setw(4) << setfill('0') << roomNumber;
+                    o << endl;
+                    break;
+                case STATE_Transfer:
+                    o << "Transfer from ";
+                    if (IsElevator(roomNumber)) o << "elevator";
+                    else o << "room " << setw(4) << setfill('0') << roomNumber;
+                    o << " to ";
+                    if (IsElevator(nextRoom)) o << "elevator";
+                    else o << "room " << setw(4) << setfill('0') << nextRoom;
+                    o << endl;
+                    break;
+                case STATE_Waiting:
+                    o << "Waiting in ";
+                    if (IsElevator(roomNumber)) o << "elevator queue";
+                    else o << "front of room " << setw(4) << setfill('0') << roomNumber;
+                    o << endl;
+                    break;
+            }
+        }
+        state = nextState;
+        if (nextState != STATE_Transfer) roomNumber = nextRoom;
+        enterSec = sec;
+        // HERE: Switch to next plan
+        if (nextState == STATE_Stay && !IsElevator(roomNumber)) ++planPtr;
+    }
+    int GetExitStateSec(int staySecs = -1)
+    {
+        switch (state)
+        {
+            case STATE_None:
+                return -1;
+            case STATE_EntryExit:
+                return enterSec + 30;
+            case STATE_Stay:
+                if (staySecs == -1) return -1;
+                return enterSec + staySecs;
+            case STATE_Transfer:
+                return enterSec + 10;
+            case STATE_Waiting:
+                return -1;
+        }
+        return -1;
     }
 };
 
 struct BigBrother
 {
+    static ostringstream schedules[30];
     vector<Agent> agents;
-    pair<int, int> inRoom[11][11];
-    priority_queue<char, vector<char>, greater<char> > waitQueue[11][11];
     priority_queue<pair<int, int>, vector<pair<int, int> >, greater<pair<int, int> > > timeline;
-    BigBrother() { memset(inRoom, 0, sizeof(inRoom)); }
-    void addAgent(const Agent & _agent, int startSec)
-    {
-        agents.push_back(_agent);
-        Agent & curAgent = agents.back();
-        curAgent.schedule << curAgent.name << endl;
-        curAgent.status = AGENT_ENTRY;
-        curAgent.curPos = 111;
-        curAgent.curPlan = 0;
-        curAgent.lastSec = startSec;
-        timeline.push(make_pair(startSec, agents.size() - 1));
-    }
-    bool update()
+    bool roomsOccupied[12][12];
+    priority_queue<pair<char, int>, vector<pair<char, int> >, greater<pair<char, int> > > roomsQueue[12][12];
+    BigBrother() : agents(), timeline()
+        { memset(roomsOccupied, 0, sizeof(roomsOccupied)); }
+    bool Update()
     {
         if (timeline.empty()) return false;
-        vector<int> pendingAgents;
         int curSec = timeline.top().first;
+        list<int> curAgentIds;
         while (!timeline.empty() && timeline.top().first == curSec)
         {
-            pendingAgents.push_back(timeline.top().second);
+            curAgentIds.push_back(timeline.top().second);
             timeline.pop();
         }
-        char queueHead[11][11];
-        memset(queueHead, 0, sizeof(queueHead));
-        for (int e = 0; e < pendingAgents.size(); ++e)
+        for (list<int>::iterator it = curAgentIds.begin(); it != curAgentIds.end();)
         {
-            int curAgentId = pendingAgents[e];
+            int curAgentId = *it;
             Agent & curAgent = agents[curAgentId];
-            if (curAgent.status == AGENT_IN_ROOM)
-                inRoom[curAgent.curPos / 100][curAgent.curPos % 100] = make_pair(0, 0);
+            if (curAgent.state == STATE_Transfer || curAgent.state == STATE_EntryExit)
+            {
+                int targetRoom = curAgent.PlotCourse(curAgent.GetPlanTarget());
+                int nextState = STATE_Waiting;
+                if (targetRoom == -1) nextState = STATE_None;
+                curAgent.ChangeState(schedules[curAgentId], curSec, nextState, targetRoom);
+                if (targetRoom != -1) roomsQueue[RoomGetFloor(targetRoom)][RoomGetId(targetRoom)].push(make_pair(curAgent.identity, curAgentId));
+                int nextSec = curAgent.GetExitStateSec();
+                if (nextSec != -1) timeline.push(make_pair(nextSec, curAgentId));
+                list<int>::iterator tmp = it;
+                ++it;
+                curAgentIds.erase(tmp);
+            }
+            else ++it;
         }
-        for (int e = 0; e < pendingAgents.size(); ++e)
+        for (list<int>::iterator it = curAgentIds.begin(); it != curAgentIds.end();)
         {
-            int curAgentId = pendingAgents[e];
+            int curAgentId = *it;
             Agent & curAgent = agents[curAgentId];
-            if (curAgent.status == AGENT_WAIT_ROOM
-                && queueHead[curAgent.curPos / 100][curAgent.curPos % 100] == 0
-                && inRoom[curAgent.curPos / 100][curAgent.curPos % 100].first == 0
-                && waitQueue[curAgent.curPos / 100][curAgent.curPos % 100].top() == curAgent.name)
+            if (curAgent.state == STATE_Stay)
             {
-                inRoom[curAgent.curPos / 100][curAgent.curPos % 100] = make_pair(curAgent.name, curSec + curAgent.plan[curAgent.curPlan].second);
-                queueHead[curAgent.curPos / 100][curAgent.curPos % 100] = curAgent.name;
-                waitQueue[curAgent.curPos / 100][curAgent.curPos % 100].pop();
+                int curRoom = curAgent.roomNumber;
+                int nextState = STATE_Transfer;
+                if (RoomGetFloor(curRoom) == 1 && curAgent.GetPlanTarget() == -1)
+                    nextState = STATE_EntryExit;
+                curAgent.ChangeState(schedules[curAgentId], curSec, nextState);
+                int nextSec = curAgent.GetExitStateSec();
+                timeline.push(make_pair(nextSec, curAgentId));
+                if (!IsElevator(curRoom)) roomsOccupied[RoomGetFloor(curRoom)][RoomGetId(curRoom)] = false;
+                list<int>::iterator tmp = it;
+                ++it;
+                curAgentIds.erase(tmp);
             }
-            else if (curAgent.status == AGENT_WAIT_ELEVATOR
-                && queueHead[curAgent.curPos / 100][curAgent.curPos % 100] == 0
-                && curSec % 5 == 0
-                && waitQueue[curAgent.curPos / 100][curAgent.curPos % 100].top() == curAgent.name)
+            else ++it;
+        }
+        curAgentIds.clear(); // Erase waiting agents; will reinsert below
+        for (int fl = 1; fl <= 10; ++fl)
+        {
+            // Elevator
+            if (!roomsQueue[fl][0].empty())
             {
-                queueHead[curAgent.curPos / 100][curAgent.curPos % 100] = curAgent.name;
-                waitQueue[curAgent.curPos / 100][curAgent.curPos % 100].pop();
+                if (curSec % 5 == 0)
+                {
+                    curAgentIds.push_back(roomsQueue[fl][0].top().second);
+                    roomsQueue[fl][0].pop();
+                }
+                if (!roomsQueue[fl][0].empty())
+                {
+                    timeline.push(make_pair(curSec / 5 * 5 + 5, roomsQueue[fl][0].top().second));
+                }
+            }
+            // Rooms
+            for (int rid = 1; rid <= 10; ++rid)
+            {
+                if (!roomsOccupied[fl][rid] && !roomsQueue[fl][rid].empty())
+                {
+                    curAgentIds.push_back(roomsQueue[fl][rid].top().second);
+                    roomsQueue[fl][rid].pop();
+                }
             }
         }
-        for (int e = 0; e < pendingAgents.size(); ++e)
+        for (list<int>::iterator it = curAgentIds.begin(); it != curAgentIds.end();)
         {
-            int curAgentId = pendingAgents[e];
+            int curAgentId = *it;
             Agent & curAgent = agents[curAgentId];
-            int nexSec, nexPos;
-            switch (curAgent.status)
+            // if (curAgent.state == STATE_Waiting) // Always true
             {
-                case AGENT_ENTRY:
-                    nexSec = curSec + 30;
-                    curAgent.schedule << sec2str(curAgent.lastSec) << " " << sec2str(nexSec) << " "
-                        << "Entry"
-                        << endl;
-                    curAgent.curPos = curAgent.plotCourse();
-                    curAgent.status = curAgent.curPos % 100 == 0 ? AGENT_WAIT_ELEVATOR : AGENT_WAIT_ROOM;
-                    waitQueue[curAgent.curPos / 100][curAgent.curPos % 100].push(curAgent.name);
-                    curAgent.lastSec = nexSec;
-                    break;
-                case AGENT_IN_ROOM:
-                    curAgent.schedule << sec2str(curAgent.lastSec) << " " << sec2str(curSec) << " "
-                        << "Stay in room " << setw(4) << setfill('0') << curAgent.curPos
-                        << endl;
-                    ++curAgent.curPlan;
-                    nexPos = curAgent.plotCourse();
-                    if (nexPos == 111)
-                    {
-                        nexSec = curSec + 30;
-                        curAgent.schedule << sec2str(curSec) << " " << sec2str(nexSec) << " "
-                            << "Exit"
-                            << endl;
-                        curAgent.status = AGENT_EXIT;
-                    }
-                    else
-                    {
-                        nexSec = curSec + 10;
-                        curAgent.schedule << sec2str(curSec) << " " << sec2str(nexSec) << " "
-                            << "Transfer from room " << setw(4) << setfill('0') << curAgent.curPos << " to ";
-                        if (nexPos % 100 != 0)
-                            curAgent.schedule << "room " << setw(4) << setfill('0') << nexPos;
-                        else
-                            curAgent.schedule << "elevator";
-                        curAgent.schedule << endl;
-                        curAgent.curPos = nexPos;
-                        curAgent.status = curAgent.curPos % 100 == 0 ? AGENT_WAIT_ELEVATOR : AGENT_WAIT_ROOM;
-                        waitQueue[curAgent.curPos / 100][curAgent.curPos % 100].push(curAgent.name);
-                        curAgent.lastSec = nexSec;
-                    }
-                    break;
-                case AGENT_IN_ELEVATOR:
-                    curAgent.schedule << sec2str(curAgent.lastSec) << " " << sec2str(curSec) << " "
-                        << "Stay in elevator"
-                        << endl;
-                    nexPos = curAgent.plotCourse();
-                    if (nexPos == 111)
-                    {
-                        nexSec = curSec + 30;
-                        curAgent.schedule << sec2str(curSec) << " " << sec2str(nexSec) << " "
-                            << "Exit"
-                            << endl;
-                        curAgent.status = AGENT_EXIT;
-                    }
-                    else
-                    {
-                        nexSec = curSec + 10;
-                        curAgent.schedule << sec2str(curSec) << " " << sec2str(nexSec) << " "
-                            << "Transfer from elevator to ";
-                        if (nexPos % 100 != 0)
-                            curAgent.schedule << "room " << setw(4) << setfill('0') << nexPos;
-                        else
-                            curAgent.schedule << "elevator";
-                        curAgent.schedule << endl;
-                        curAgent.curPos = nexPos;
-                        curAgent.status = curAgent.curPos % 100 == 0 ? AGENT_WAIT_ELEVATOR : AGENT_WAIT_ROOM;
-                        waitQueue[curAgent.curPos / 100][curAgent.curPos % 100].push(curAgent.name);
-                        curAgent.lastSec = nexSec;
-                    }
-                    break;
-                case AGENT_WAIT_ROOM:
-                    nexSec = inRoom[curAgent.curPos / 100][curAgent.curPos % 100].second;
-                    if (queueHead[curAgent.curPos / 100][curAgent.curPos % 100] == curAgent.name)
-                    {
-                        if (curAgent.lastSec != curSec)
-                        {
-                            curAgent.schedule << sec2str(curAgent.lastSec) << " " << sec2str(curSec) << " "
-                                << "Waiting in front of room " << setw(4) << setfill('0') << curAgent.curPos
-                                << endl;
-                        }
-                        curAgent.status = AGENT_IN_ROOM;
-                        curAgent.lastSec = curSec;
-                    }
-                    break;
-                case AGENT_WAIT_ELEVATOR:
-                    if (curSec % 5 != 0)
-                    {
-                        nexSec = curSec / 5 * 5 + 5;
-                        break;
-                    }
-                    if (queueHead[curAgent.curPos / 100][curAgent.curPos % 100] == curAgent.name)
-                    {
-                        if (curAgent.lastSec != curSec)
-                        {
-                            curAgent.schedule << sec2str(curAgent.lastSec) << " " << sec2str(curSec) << " "
-                                << "Waiting in elevator queue"
-                                << endl;
-                        }
-                        nexPos = curAgent.plotCourse();
-                        nexSec = curSec + 30 * abs(nexPos / 100 - curAgent.curPos / 100);
-                        curAgent.curPos = nexPos;
-                        curAgent.status = AGENT_IN_ELEVATOR;
-                        curAgent.lastSec = curSec;
-                    }
-                    else
-                    {
-                        nexSec = curSec + 5;
-                    }
-                    break;
-                default:
-                    break;
+                int curRoom = curAgent.roomNumber;
+                int targetRoom = curRoom;
+                if (IsElevator(curRoom)) targetRoom = curAgent.PlotCourse(curAgent.GetPlanTarget());
+                int planDuration = curAgent.GetPlanDuration();
+                curAgent.ChangeState(schedules[curAgentId], curSec, STATE_Stay, targetRoom);
+                int nextSec = curAgent.GetExitStateSec(IsElevator(targetRoom)
+                    ? abs(RoomGetFloor(targetRoom) - RoomGetFloor(curRoom)) * 30
+                    : planDuration);
+                timeline.push(make_pair(nextSec, curAgentId));
+                if (!IsElevator(targetRoom)) roomsOccupied[RoomGetFloor(targetRoom)][RoomGetId(targetRoom)] = true;
+                list<int>::iterator tmp = it;
+                ++it;
+                curAgentIds.erase(tmp);
             }
-            if (curAgent.status != AGENT_EXIT)
-                timeline.push(make_pair(nexSec, curAgentId));
+            //else ++it;
         }
         return true;
     }
 };
+ostringstream BigBrother::schedules[30];
 
-BigBrother bob;
-bool agentsOrderCompare(int a, int b)
+BigBrother bb;
+bool AgentLexicalLess(int a, int b)
 {
-    return bob.agents[a].name < bob.agents[b].name;
+    return bb.agents[a].identity < bb.agents[b].identity;
 }
 
 int main()
 {
     ios::sync_with_stdio(false);
 
-    Agent alice;
-    while (cin >> alice.name, alice.name != '.')
+    string agentCode, beginTime;
+    while (cin >> agentCode, agentCode[0] != '.')
     {
-        string hms;
-        cin >> hms;
-        int startSec = str2sec(hms);
-        int roomNumber, stayTime;
-        alice.plan.clear();
+        bb.agents.push_back(Agent());
+        int curAgentId = bb.agents.size() - 1;
+        Agent & curAgent = bb.agents.back();
+        curAgent.identity = agentCode[0];
+        cin >> beginTime;
+        int beginSec = str2sec(beginTime);
+        curAgent.state = STATE_EntryExit;
+        curAgent.roomNumber = -1;
+        curAgent.enterSec = beginSec;
+        bb.timeline.push(make_pair(curAgent.GetExitStateSec(), curAgentId));
+        int roomNumber, duration;
         while (cin >> roomNumber, roomNumber != 0)
         {
-            cin >> stayTime;
-            alice.plan.push_back(make_pair(roomNumber,stayTime));
+            cin >> duration;
+            curAgent.plans.push_back(make_pair(roomNumber, duration));
         }
-        bob.addAgent(alice, startSec);
     }
-    while (bob.update());
-    int agentsOrder[30];
-    for (int i = 0; i < bob.agents.size(); ++i)
-        agentsOrder[i] = i;
-    sort(agentsOrder, agentsOrder + bob.agents.size(), agentsOrderCompare);
-    for (int i = 0; i < bob.agents.size(); ++i)
-        cout << bob.agents[agentsOrder[i]].schedule.str() << endl;
+    while (bb.Update());
+    int agentOrder[30];
+    for (int i = 0; i < bb.agents.size(); ++i)
+        agentOrder[i] = i;
+    sort(agentOrder, agentOrder + bb.agents.size(), AgentLexicalLess);
+    for (int i = 0; i < bb.agents.size(); ++i)
+    {
+        cout << bb.agents[agentOrder[i]].identity << endl;
+        cout << BigBrother::schedules[agentOrder[i]].str() << endl;
+    }
 
     return 0;
 }

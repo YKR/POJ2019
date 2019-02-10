@@ -6,6 +6,7 @@
 #include <cstring>
 
 #include <iomanip>
+#include <sstream>
 #include <iostream>
 #include <algorithm>
 
